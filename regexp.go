@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/valyala/fasthttp"
 )
 
 type routeRegexpOptions struct {
@@ -171,9 +173,9 @@ type routeRegexp struct {
 }
 
 // Match matches the regexp against the URL host or path.
-func (r *routeRegexp) Match(req *http.Request, match *RouteMatch) bool {
+func (r *routeRegexp) Match(ctx *fasthttp.RequestCtx, match *RouteMatch) bool {
 	if r.regexpType == regexpTypeHost {
-		host := getHost(req)
+		host := getHost(ctx)
 		if r.wildcardHostPort {
 			// Don't be strict on the port match
 			if i := strings.Index(host, ":"); i != -1 {
@@ -184,12 +186,12 @@ func (r *routeRegexp) Match(req *http.Request, match *RouteMatch) bool {
 	}
 
 	if r.regexpType == regexpTypeQuery {
-		return r.matchQueryString(req)
+		return r.matchQueryString(ctx)
 	}
-	path := req.URL.Path
-	if r.options.useEncodedPath {
-		path = req.URL.EscapedPath()
-	}
+	path := string(ctx.URI().Path())
+	// if r.options.useEncodedPath {
+	// 	path = req.URL.EscapedPath()
+	// }
 	return r.regexp.MatchString(path)
 }
 
@@ -225,12 +227,12 @@ func (r *routeRegexp) url(values map[string]string) (string, error) {
 // getURLQuery returns a single query parameter from a request URL.
 // For a URL with foo=bar&baz=ding, we return only the relevant key
 // value pair for the routeRegexp.
-func (r *routeRegexp) getURLQuery(req *http.Request) string {
+func (r *routeRegexp) getURLQuery(ctx *fasthttp.RequestCtx) string {
 	if r.regexpType != regexpTypeQuery {
 		return ""
 	}
 	templateKey := strings.SplitN(r.template, "=", 2)[0]
-	val, ok := findFirstQueryKey(req.URL.RawQuery, templateKey)
+	val, ok := findFirstQueryKey(ctx.URI().QueryArgs().String(), templateKey)
 	if ok {
 		return templateKey + "=" + val
 	}
@@ -275,8 +277,8 @@ func findFirstQueryKey(rawQuery, key string) (value string, ok bool) {
 	return "", false
 }
 
-func (r *routeRegexp) matchQueryString(req *http.Request) bool {
-	return r.regexp.MatchString(r.getURLQuery(req))
+func (r *routeRegexp) matchQueryString(ctx *fasthttp.RequestCtx) bool {
+	return r.regexp.MatchString(r.getURLQuery(ctx))
 }
 
 // braceIndices returns the first level curly brace indices from a string.
@@ -321,10 +323,10 @@ type routeRegexpGroup struct {
 }
 
 // setMatch extracts the variables from the URL once a route matches.
-func (v routeRegexpGroup) setMatch(req *http.Request, m *RouteMatch, r *Route) {
+func (v routeRegexpGroup) setMatch(ctx *fasthttp.RequestCtx, m *RouteMatch, r *Route) {
 	// Store host variables.
 	if v.host != nil {
-		host := getHost(req)
+		host := getHost(ctx)
 		if v.host.wildcardHostPort {
 			// Don't be strict on the port match
 			if i := strings.Index(host, ":"); i != -1 {
@@ -336,9 +338,9 @@ func (v routeRegexpGroup) setMatch(req *http.Request, m *RouteMatch, r *Route) {
 			extractVars(host, matches, v.host.varsN, m.Vars)
 		}
 	}
-	path := req.URL.Path
+	path := string(ctx.URI().Path())
 	if r.useEncodedPath {
-		path = req.URL.EscapedPath()
+		//path = req.URL.EscapedPath()
 	}
 	// Store path variables.
 	if v.path != nil {
@@ -350,20 +352,23 @@ func (v routeRegexpGroup) setMatch(req *http.Request, m *RouteMatch, r *Route) {
 				p1 := strings.HasSuffix(path, "/")
 				p2 := strings.HasSuffix(v.path.template, "/")
 				if p1 != p2 {
-					u, _ := url.Parse(req.URL.String())
+					u, _ := url.Parse(ctx.Request.URI().String())
 					if p1 {
 						u.Path = u.Path[:len(u.Path)-1]
 					} else {
 						u.Path += "/"
 					}
-					m.Handler = http.RedirectHandler(u.String(), http.StatusMovedPermanently)
+					m.Handler = func(ctx *fasthttp.RequestCtx) {
+						//http.RedirectHandler(u.String(), http.StatusMovedPermanently)
+						ctx.Redirect(u.String(),http.StatusMovedPermanently)
+					}
 				}
 			}
 		}
 	}
 	// Store query string variables.
 	for _, q := range v.queries {
-		queryURL := q.getURLQuery(req)
+		queryURL := q.getURLQuery(ctx)
 		matches := q.regexp.FindStringSubmatchIndex(queryURL)
 		if len(matches) > 0 {
 			extractVars(queryURL, matches, q.varsN, m.Vars)
@@ -374,11 +379,11 @@ func (v routeRegexpGroup) setMatch(req *http.Request, m *RouteMatch, r *Route) {
 // getHost tries its best to return the request host.
 // According to section 14.23 of RFC 2616 the Host header
 // can include the port number if the default value of 80 is not used.
-func getHost(r *http.Request) string {
-	if r.URL.IsAbs() {
-		return r.URL.Host
-	}
-	return r.Host
+func getHost(r *fasthttp.RequestCtx) string {
+	// if r.URI(). {
+	// 	return r.URL.Host
+	// }
+	return string(r.Host())
 }
 
 func extractVars(input string, matches []int, names []string, output map[string]string) {

@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"path"
 	"regexp"
+
+	"github.com/valyala/fasthttp"
 )
 
 var (
@@ -46,10 +48,10 @@ func NewRouter() *Router {
 // This will send all incoming requests to the router.
 type Router struct {
 	// Configurable Handler to be used when no route matches.
-	NotFoundHandler http.Handler
+	NotFoundHandler fasthttp.RequestHandler
 
 	// Configurable Handler to be used when the request method does not match the route.
-	MethodNotAllowedHandler http.Handler
+	MethodNotAllowedHandler fasthttp.RequestHandler
 
 	// Routes to be matched, in order.
 	routes []*Route
@@ -133,9 +135,9 @@ func copyRouteRegexp(r *routeRegexp) *routeRegexp {
 // will be filled in the match argument's MatchErr field. If the match failure type
 // (eg: not found) has a registered handler, the handler is assigned to the Handler
 // field of the match argument.
-func (r *Router) Match(req *http.Request, match *RouteMatch) bool {
+func (r *Router) Match(ctx *fasthttp.RequestCtx, match *RouteMatch) bool {
 	for _, route := range r.routes {
-		if route.Match(req, match) {
+		if route.Match(ctx, match) {
 			// Build middleware chain if no error was found
 			if match.MatchErr == nil {
 				for i := len(r.middlewares) - 1; i >= 0; i-- {
@@ -170,33 +172,34 @@ func (r *Router) Match(req *http.Request, match *RouteMatch) bool {
 //
 // When there is a match, the route variables can be retrieved calling
 // mux.Vars(request).
-func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (r *Router) ServeHTTP(ctx *fasthttp.RequestCtx) {
 	if !r.skipClean {
-		path := req.URL.Path
-		if r.useEncodedPath {
-			path = req.URL.EscapedPath()
-		}
+		//path := string(ctx.URI().Path())
+		//todo
+		//if r.useEncodedPath {
+		//	path = req.URL.EscapedPath()
+		//}
 		// Clean path to canonical form and redirect.
-		if p := cleanPath(path); p != path {
-
-			// Added 3 lines (Philip Schlump) - It was dropping the query string and #whatever from query.
-			// This matches with fix in go 1.2 r.c. 4 for same problem.  Go Issue:
-			// http://code.google.com/p/go/issues/detail?id=5252
-			url := *req.URL
-			url.Path = p
-			p = url.String()
-
-			w.Header().Set("Location", p)
-			w.WriteHeader(http.StatusMovedPermanently)
-			return
-		}
+		//if p := cleanPath(path); p != path {
+		//
+		//	// Added 3 lines (Philip Schlump) - It was dropping the query string and #whatever from query.
+		//	// This matches with fix in go 1.2 r.c. 4 for same problem.  Go Issue:
+		//	// http://code.google.com/p/go/issues/detail?id=5252
+		//	url := *req.URL
+		//	url.Path = p
+		//	p = url.String()
+		//
+		//	w.Header().Set("Location", p)
+		//	w.WriteHeader(http.StatusMovedPermanently)
+		//	return
+		//}
 	}
 	var match RouteMatch
-	var handler http.Handler
-	if r.Match(req, &match) {
+	var handler fasthttp.RequestHandler
+	if r.Match(ctx, &match) {
 		handler = match.Handler
-		req = requestWithVars(req, match.Vars)
-		req = requestWithRoute(req, match.Route)
+		//req = requestWithVars(req, match.Vars)
+		//req = requestWithRoute(req, match.Route)
 	}
 
 	if handler == nil && match.MatchErr == ErrMethodMismatch {
@@ -204,10 +207,11 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if handler == nil {
-		handler = http.NotFoundHandler()
+		handler = func(ctx *fasthttp.RequestCtx) {
+			ctx.SetStatusCode(http.StatusNotFound)
+		}
 	}
-
-	handler.ServeHTTP(w, req)
+	handler(ctx)
 }
 
 // Get returns a route registered with the given name.
@@ -289,14 +293,13 @@ func (r *Router) Name(name string) *Route {
 
 // Handle registers a new route with a matcher for the URL path.
 // See Route.Path() and Route.Handler().
-func (r *Router) Handle(path string, handler http.Handler) *Route {
+func (r *Router) Handle(path string, handler fasthttp.RequestHandler) *Route {
 	return r.NewRoute().Path(path).Handler(handler)
 }
 
 // HandleFunc registers a new route with a matcher for the URL path.
 // See Route.Path() and Route.HandlerFunc().
-func (r *Router) HandleFunc(path string, f func(http.ResponseWriter,
-	*http.Request)) *Route {
+func (r *Router) HandleFunc(path string, f func(*fasthttp.RequestCtx)) *Route {
 	return r.NewRoute().Path(path).HandlerFunc(f)
 }
 
@@ -389,14 +392,14 @@ func (r *Router) walk(walkFn WalkFunc, ancestors []*Route) error {
 				ancestors = ancestors[:len(ancestors)-1]
 			}
 		}
-		if h, ok := t.handler.(*Router); ok {
-			ancestors = append(ancestors, t)
-			err := h.walk(walkFn, ancestors)
-			if err != nil {
-				return err
-			}
-			ancestors = ancestors[:len(ancestors)-1]
-		}
+		//if h, ok := t.handler.(*Router); ok {
+		//	ancestors = append(ancestors, t)
+		//	err := h.walk(walkFn, ancestors)
+		//	if err != nil {
+		//		return err
+		//	}
+		//	ancestors = ancestors[:len(ancestors)-1]
+		//}
 	}
 	return nil
 }
@@ -408,7 +411,7 @@ func (r *Router) walk(walkFn WalkFunc, ancestors []*Route) error {
 // RouteMatch stores information about a matched route.
 type RouteMatch struct {
 	Route   *Route
-	Handler http.Handler
+	Handler fasthttp.RequestHandler
 	Vars    map[string]string
 
 	// MatchErr is set to appropriate matching error
@@ -597,10 +600,10 @@ func matchMapWithRegex(toCheck map[string]*regexp.Regexp, toMatch map[string][]s
 }
 
 // methodNotAllowed replies to the request with an HTTP status code 405.
-func methodNotAllowed(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusMethodNotAllowed)
+func methodNotAllowed(ctx *fasthttp.RequestCtx) {
+	ctx.SetStatusCode(http.StatusMethodNotAllowed)
 }
 
 // methodNotAllowedHandler returns a simple request handler
 // that replies to each request with a status code 405.
-func methodNotAllowedHandler() http.Handler { return http.HandlerFunc(methodNotAllowed) }
+func methodNotAllowedHandler() fasthttp.RequestHandler { return fasthttp.RequestHandler(methodNotAllowed) }

@@ -7,16 +7,15 @@ package mux
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"github.com/valyala/fasthttp"
 )
-
 // Route stores information to match a request and build URLs.
 type Route struct {
 	// Request handler for the route.
-	handler http.Handler
+	handler fasthttp.RequestHandler
 	// If true, this route never matches: it is only used to build URLs.
 	buildOnly bool
 	// The name used to build URLs.
@@ -38,7 +37,7 @@ func (r *Route) SkipClean() bool {
 }
 
 // Match matches the route against the request.
-func (r *Route) Match(req *http.Request, match *RouteMatch) bool {
+func (r *Route) Match(ctx *fasthttp.RequestCtx, match *RouteMatch) bool {
 	if r.buildOnly || r.err != nil {
 		return false
 	}
@@ -47,7 +46,7 @@ func (r *Route) Match(req *http.Request, match *RouteMatch) bool {
 
 	// Match everything.
 	for _, m := range r.matchers {
-		if matched := m.Match(req, match); !matched {
+		if matched := m.Match(ctx, match); !matched {
 			if _, ok := m.(methodMatcher); ok {
 				matchErr = ErrMethodMismatch
 				continue
@@ -93,7 +92,7 @@ func (r *Route) Match(req *http.Request, match *RouteMatch) bool {
 	}
 
 	// Set variables.
-	r.regexp.setMatch(req, match, r)
+	r.regexp.setMatch(ctx, match, r)
 	return true
 }
 
@@ -115,7 +114,7 @@ func (r *Route) BuildOnly() *Route {
 // Handler --------------------------------------------------------------------
 
 // Handler sets a handler for the route.
-func (r *Route) Handler(handler http.Handler) *Route {
+func (r *Route) Handler(handler fasthttp.RequestHandler) *Route {
 	if r.err == nil {
 		r.handler = handler
 	}
@@ -123,12 +122,12 @@ func (r *Route) Handler(handler http.Handler) *Route {
 }
 
 // HandlerFunc sets a handler function for the route.
-func (r *Route) HandlerFunc(f func(http.ResponseWriter, *http.Request)) *Route {
-	return r.Handler(http.HandlerFunc(f))
+func (r *Route) HandlerFunc(f func(ctx *fasthttp.RequestCtx)) *Route {
+	return r.Handler(fasthttp.RequestHandler(f))
 }
 
 // GetHandler returns the handler for the route, if any.
-func (r *Route) GetHandler() http.Handler {
+func (r *Route) GetHandler() fasthttp.RequestHandler {
 	return r.handler
 }
 
@@ -159,7 +158,7 @@ func (r *Route) GetName() string {
 
 // matcher types try to match a request.
 type matcher interface {
-	Match(*http.Request, *RouteMatch) bool
+	Match(*fasthttp.RequestCtx, *RouteMatch) bool
 }
 
 // addMatcher adds a matcher to the route.
@@ -223,8 +222,9 @@ func (r *Route) addRegexpMatcher(tpl string, typ regexpType) error {
 // headerMatcher matches the request against header values.
 type headerMatcher map[string]string
 
-func (m headerMatcher) Match(r *http.Request, match *RouteMatch) bool {
-	return matchMapWithString(m, r.Header, true)
+func (m headerMatcher) Match(ctx *fasthttp.RequestCtx, match *RouteMatch) bool {
+	//return matchMapWithString(m, ctx.Request.Header, true)
+	return false
 }
 
 // Headers adds a matcher for request header values.
@@ -248,8 +248,9 @@ func (r *Route) Headers(pairs ...string) *Route {
 // headerRegexMatcher matches the request against the route given a regex for the header
 type headerRegexMatcher map[string]*regexp.Regexp
 
-func (m headerRegexMatcher) Match(r *http.Request, match *RouteMatch) bool {
-	return matchMapWithRegex(m, r.Header, true)
+func (m headerRegexMatcher) Match(r *fasthttp.RequestCtx, match *RouteMatch) bool {
+	//return matchMapWithRegex(m, r.Request.Header, true)
+	return false
 }
 
 // HeadersRegexp accepts a sequence of key/value pairs, where the value has regex
@@ -298,10 +299,10 @@ func (r *Route) Host(tpl string) *Route {
 // MatcherFunc ----------------------------------------------------------------
 
 // MatcherFunc is the function signature used by custom matchers.
-type MatcherFunc func(*http.Request, *RouteMatch) bool
+type MatcherFunc func(*fasthttp.RequestCtx, *RouteMatch) bool
 
 // Match returns the match for a given request.
-func (m MatcherFunc) Match(r *http.Request, match *RouteMatch) bool {
+func (m MatcherFunc) Match(r *fasthttp.RequestCtx, match *RouteMatch) bool {
 	return m(r, match)
 }
 
@@ -315,8 +316,8 @@ func (r *Route) MatcherFunc(f MatcherFunc) *Route {
 // methodMatcher matches the request against HTTP methods.
 type methodMatcher []string
 
-func (m methodMatcher) Match(r *http.Request, match *RouteMatch) bool {
-	return matchInArray(m, r.Method)
+func (m methodMatcher) Match(r *fasthttp.RequestCtx, match *RouteMatch) bool {
+	return matchInArray(m, string(r.Method()))
 }
 
 // Methods adds a matcher for HTTP methods.
@@ -411,15 +412,15 @@ func (r *Route) Queries(pairs ...string) *Route {
 // schemeMatcher matches the request against URL schemes.
 type schemeMatcher []string
 
-func (m schemeMatcher) Match(r *http.Request, match *RouteMatch) bool {
-	scheme := r.URL.Scheme
+func (m schemeMatcher) Match(r *fasthttp.RequestCtx, match *RouteMatch) bool {
+	scheme := string(r.URI().Scheme())
 	// https://golang.org/pkg/net/http/#Request
 	// "For [most] server requests, fields other than Path and RawQuery will be
 	// empty."
 	// Since we're an http muxer, the scheme is either going to be http or https
 	// though, so we can just set it based on the tls termination state.
 	if scheme == "" {
-		if r.TLS == nil {
+		if !r.IsTLS() {
 			scheme = "http"
 		} else {
 			scheme = "https"

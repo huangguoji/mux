@@ -1,22 +1,21 @@
 package mux
 
 import (
-	"net/http"
-	"strings"
+	"github.com/valyala/fasthttp"
 )
 
 // MiddlewareFunc is a function which receives an http.Handler and returns another http.Handler.
 // Typically, the returned handler is a closure which does something with the http.ResponseWriter and http.Request passed
 // to it, and then calls the handler passed as parameter to the MiddlewareFunc.
-type MiddlewareFunc func(http.Handler) http.Handler
+type MiddlewareFunc func(fasthttp.RequestHandler) fasthttp.RequestHandler
 
 // middleware interface is anything which implements a MiddlewareFunc named Middleware.
 type middleware interface {
-	Middleware(handler http.Handler) http.Handler
+	Middleware(handler fasthttp.RequestHandler) fasthttp.RequestHandler
 }
 
 // Middleware allows MiddlewareFunc to implement the middleware interface.
-func (mw MiddlewareFunc) Middleware(handler http.Handler) http.Handler {
+func (mw MiddlewareFunc) Middleware(handler fasthttp.RequestHandler) fasthttp.RequestHandler {
 	return mw(handler)
 }
 
@@ -36,31 +35,31 @@ func (r *Router) useInterface(mw middleware) {
 // on requests for routes that have an OPTIONS method matcher to all the method matchers on
 // the route. Routes that do not explicitly handle OPTIONS requests will not be processed
 // by the middleware. See examples for usage.
-func CORSMethodMiddleware(r *Router) MiddlewareFunc {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			allMethods, err := getAllMethodsForRoute(r, req)
-			if err == nil {
-				for _, v := range allMethods {
-					if v == http.MethodOptions {
-						w.Header().Set("Access-Control-Allow-Methods", strings.Join(allMethods, ","))
-					}
-				}
-			}
-
-			next.ServeHTTP(w, req)
-		})
-	}
-}
+//func CORSMethodMiddleware(r *Router) MiddlewareFunc {
+//	return func(next http.Handler) http.Handler {
+//		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+//			allMethods, err := getAllMethodsForRoute(r, req)
+//			if err == nil {
+//				for _, v := range allMethods {
+//					if v == http.MethodOptions {
+//						w.Header().Set("Access-Control-Allow-Methods", strings.Join(allMethods, ","))
+//					}
+//				}
+//			}
+//
+//			next.ServeHTTP(w, req)
+//		})
+//	}
+//}
 
 // getAllMethodsForRoute returns all the methods from method matchers matching a given
 // request.
-func getAllMethodsForRoute(r *Router, req *http.Request) ([]string, error) {
+func getAllMethodsForRoute(r *Router, ctx *fasthttp.RequestCtx) ([]string, error) {
 	var allMethods []string
 
 	for _, route := range r.routes {
 		var match RouteMatch
-		if route.Match(req, &match) || match.MatchErr == ErrMethodMismatch {
+		if route.Match(ctx, &match) || match.MatchErr == ErrMethodMismatch {
 			methods, err := route.GetMethods()
 			if err != nil {
 				return nil, err
